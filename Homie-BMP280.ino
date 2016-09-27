@@ -24,13 +24,6 @@ void loopHandler() {
     float tempF = temperature * 1.8 + 32;
     float pressure = bmp.readPressure();
     float mbarToInches = pressure / 100 * 0.0295301;
-
-    Serial.print("temperature F: ");
-    Serial.println(tempF);
-    Serial.print("temperature C: ");
-    Serial.println(temperature);
-    Serial.print("pressure: ");
-    Serial.println(mbarToInches);
     if (Homie.isConnected()) {
       Homie.setNodeProperty(temperatureNode, "F").send(String(tempF));
       Homie.setNodeProperty(pressureNode, "inches").send(String(mbarToInches));
