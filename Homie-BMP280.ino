@@ -1,63 +1,76 @@
-
 #include <Homie.h>
 #include <Wire.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_BMP280.h>
+#include <BMP280.h>
 
-Adafruit_BMP280 bmp;
+extern "C" {
+  #include "user_interface.h"
+}
 
-const int sleepTimeS = 300;
+// ADC Adjustment -  Measure actual VCC voltage with an accurate voltage meter. 
+// [measured vcc voltage] / (ESP.getVcc() / 1000) 
+#define ADC_ADJ 1.02774274905422;  // perahps an adjustment ratio
+ADC_MODE(ADC_VCC);
+
+BMP280 bmp;
+
+const int sleepTimeS = 3600;
 bool sentOnce = false;
 
 HomieNode temperatureNode("temperature", "temperature");
 HomieNode pressureNode("pressure", "pressure");
+HomieNode voltageNode("battery", "battery");
 
-void setupHandler() {
-  Homie.setNodeProperty(temperatureNode, "unit").setRetained(true).send("F");
-  Homie.setNodeProperty(pressureNode, "unit").setRetained(true).send("inches");
+float readVcc() {
+  int vccMv = ESP.getVcc();
+  float vcc = vccMv / 1000.0;
+  return vcc * ADC_ADJ;
 }
 
 void loopHandler() {
-  if (!sentOnce) {
-    sentOnce = true;
-    float temperature = bmp.readTemperature();
-    float tempF = temperature * 1.8 + 32;
-    float pressure = bmp.readPressure();
-    float mbarToInches = pressure / 100 * 0.0295301;
-    if (Homie.isConnected()) {
-      Homie.setNodeProperty(temperatureNode, "F").send(String(tempF));
-      Homie.setNodeProperty(pressureNode, "inches").send(String(mbarToInches));
+   if (Homie.isConnected()) {
+    if (!sentOnce) {
+      double temperature, pressure;
+      char result = bmp.startMeasurment();
+      if (result != 0) {
+        delay(result);
+        result = bmp.getTemperatureAndPressure(temperature, pressure);
+        if (result != 0) {
+          float tempF = temperature * 1.8 + 32;
+          float mbarToInches = pressure * 0.0295301;
+          float vcc = readVcc();
+          temperatureNode.setProperty("Fahrenheit").send(String(tempF));
+          temperatureNode.setProperty("Celsius").send(String(temperature));
+          pressureNode.setProperty("inches").send(String(mbarToInches));
+          pressureNode.setProperty("mBar").send(String(pressure));
+          voltageNode.setProperty("volts").send(String(vcc));
+          sentOnce = true;
+        }
+      }
     }
   }
 }
 
 void onHomieEvent(HomieEvent event) {
-  switch(event) {
-    case HomieEvent::MQTT_CONNECTED:
+  switch (event.type) {
+    case HomieEventType::MQTT_CONNECTED:
       sentOnce = false;
-      Homie.prepareForSleep();
+      Homie.prepareToSleep();
       break;
-    case HomieEvent::READY_FOR_SLEEP:
-      ESP.deepSleep(sleepTimeS * 1000000, RF_NO_CAL);
+    case HomieEventType::READY_TO_SLEEP:
+      ESP.deepSleep(sleepTimeS * 1000000);
       break;
   }
 }
 
 void setup() {
-  Serial.begin(115200);
-  bmp.begin(0x76);  // XXX pull i2c address from config?
+  Serial.begin(74880);
+  // Serial.setDebugOutput(true);
+  bmp.begin();
   Homie_setFirmware("bmp280", "1.0.0");
-  Homie.setSetupFunction(setupHandler);
   Homie.setLoopFunction(loopHandler);
   Homie.onEvent(onHomieEvent);
-  Homie.disableLogging();
   Homie.disableLedFeedback();
-
-  temperatureNode.advertise("unit");
-  temperatureNode.advertise("temperature");
-  pressureNode.advertise("unit");
-  pressureNode.advertise("pressure");
-
+  bmp.setOversampling(4);
   Homie.setup();
 }
 
